@@ -11,9 +11,9 @@ A=${1:?majorA}
 env_banner
 
 section "activate, then vfox use -g java@$A"
-eval "$(vfox activate bash)"
+eval "$("$VFOX" activate bash)"
 prompt
-timeout 120 vfox use -g java@"$A"
+$TIMEOUT 120 "$VFOX" use -g java@"$A"
 prompt
 show "G-1: after use -g $A in the same shell"
 

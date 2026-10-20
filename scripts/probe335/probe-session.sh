@@ -13,26 +13,26 @@ B=${2:?majorB}
 env_banner
 
 section "activate (what .bashrc does)"
-eval "$(vfox activate bash)"
+eval "$("$VFOX" activate bash)"
 echo "PROMPT_COMMAND=[${PROMPT_COMMAND[*]}]"
 echo "__VFOX_SHELL=[$__VFOX_SHELL] __VFOX_PID=[$__VFOX_PID] __VFOX_CURTMPPATH=[$__VFOX_CURTMPPATH]"
 prompt
 show "S0: after activate and the first prompt, nothing selected yet"
 
 section "vfox use java@$A (session) + prompt"
-timeout 120 vfox use java@"$A"
+$TIMEOUT 120 "$VFOX" use java@"$A"
 prompt
 show "S1: after use $A"
 gradle_jv
 
 section "vfox use java@$B (session) + prompt"
-timeout 120 vfox use java@"$B"
+$TIMEOUT 120 "$VFOX" use java@"$B"
 prompt
 show "S2: after use $B"
 gradle_jv
 
 section "vfox use java@$A (session), prompt NOT run"
-timeout 120 vfox use java@"$A"
+$TIMEOUT 120 "$VFOX" use java@"$A"
 show "S3: after use $A, the hook has not run yet"
 gradle_jv
 prompt
@@ -44,6 +44,7 @@ if [ -n "$GRADLE" ]; then
   gradle_jv_nodaemon
   gradle_stop
   gradle_jv
+  gradle_stop
 fi
 
 section "done"

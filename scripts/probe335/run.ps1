@@ -1,29 +1,19 @@
-# vfox#335 probe driver, run 2. Lives on a scratch branch of a fork only; scripts/e2e-test.ps1 calls it.
-# 1. control: a Gradle daemon and a JAVA_HOME junction that is re-pointed, no vfox involved
-# 2. vfox 1.0.13 + java plugin 0.6.2 (current) under Git Bash and PowerShell; it runs first because 1.0.x keeps using an
-#    existing ~/.version-fox, which the 0.5.4 run below creates
-# 3. vfox 0.5.4 + java plugin 0.4.3 (what the reporter ran) under Git Bash
+# vfox#335 probe driver, run 3. Lives on a scratch branch of a fork only; scripts/e2e-test.ps1 calls it.
+# The same scenarios as run 2, under the bash flavours run 2 did not cover:
+#   - Git Bash with MSYSTEM=MINGW64 (the report's prompt says MINGW64)
+#   - the MSYS2 that ships on the runner, MSYSTEM=MINGW64, Windows PATH inherited
+#   - a real Cygwin (the issue title says cygwin)
+# vfox 1.0.13 + java plugin 0.6.2 runs first because 1.0.x keeps using an existing ~/.version-fox, which the 0.5.4 run creates.
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $probe = $PSScriptRoot
-$bash = "$env:ProgramFiles\Git\bin\bash.exe"
-$pwshExe = (Get-Process -Id $PID).Path
+$gitBash = "$env:ProgramFiles\Git\bin\bash.exe"
 
 function Section([string]$title) {
     Write-Host ''
     Write-Host ('=' * 100)
     Write-Host "##### $title"
     Write-Host ('=' * 100)
-}
-
-function Bash([string]$script, [string[]]$scriptArgs = @()) {
-    & $bash --login "$probe\$script" @scriptArgs
-    Write-Host "[$script exit code: $LASTEXITCODE]"
-}
-
-function Pwsh7([string]$script, [string[]]$scriptArgs = @()) {
-    & $pwshExe -NoProfile -File "$probe\$script" @scriptArgs
-    Write-Host "[$script exit code: $LASTEXITCODE]"
 }
 
 # Windows checkouts may turn LF into CRLF; bash would then choke on the scripts.
@@ -37,11 +27,35 @@ Get-ChildItem $probe -Filter *.sh | ForEach-Object {
 
 # The e2e job sets VFOX_HOME to a folder on D:; a user has the default home on C:.
 Remove-Item Env:VFOX_HOME -ErrorAction SilentlyContinue
+Remove-Item Env:GRADLE -ErrorAction SilentlyContinue
+Remove-Item Env:GRADLE_PROJECT -ErrorAction SilentlyContinue
 $env:CHERE_INVOKING = '1'
-$env:GRADLE = '/c/probe/gradle/gradle-8.9/bin/gradle'
-$env:GRADLE_PROJECT = '/c/probe/gp'
 $basePath = $env:Path
 $baseJavaHome = $env:JAVA_HOME
+
+$default = @{ Name = 'gitbash-default'; Exe = $gitBash; Env = @{}; Cygwin = $false }
+$flavours = @(
+    @{ Name = 'gitbash-MSYSTEM-MINGW64'; Exe = $gitBash; Env = @{ MSYSTEM = 'MINGW64' }; Cygwin = $false },
+    @{ Name = 'msys2-MINGW64'; Exe = 'C:\msys64\usr\bin\bash.exe'; Env = @{ MSYSTEM = 'MINGW64'; MSYS2_PATH_TYPE = 'inherit' }; Cygwin = $false },
+    @{ Name = 'cygwin'; Exe = 'C:\cygwin64\bin\bash.exe'; Env = @{ CYGWIN = 'nodosfilewarning' }; Cygwin = $true }
+)
+
+function Invoke-Flavour([hashtable]$fl, [string]$script, [string[]]$scriptArgs = @()) {
+    if (-not (Test-Path $fl.Exe)) { Write-Host "[$($fl.Name): $($fl.Exe) is missing, skipped $script]"; return }
+    $saved = @{}
+    foreach ($k in $fl.Env.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
+        [Environment]::SetEnvironmentVariable($k, $fl.Env[$k], 'Process')
+    }
+    try {
+        $path = "$probe\$script"
+        if ($fl.Cygwin) { $path = (& 'C:\cygwin64\bin\cygpath.exe' -u $path) }
+        & $fl.Exe --login $path @scriptArgs
+        Write-Host "[$($fl.Name): $script exit code: $LASTEXITCODE]"
+    } finally {
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') }
+    }
+}
 
 # What a newly opened shell gets from Explorer: the Machine PATH, then the User PATH (and the user-level JAVA_HOME).
 function Use-RegistryEnv([string]$VfoxDir) {
@@ -65,71 +79,74 @@ function Show-Registry([string]$why) {
     Get-ItemProperty HKCU:\Environment | Select-Object Path, JAVA_HOME, VERSION_FOX_PATH | Format-List | Out-String -Width 4000
 }
 
+function Install-Cygwin {
+    if (Test-Path 'C:\cygwin64\bin\bash.exe') { return }
+    $setup = 'C:\probe\dl\cygwin-setup-x86_64.exe'
+    try {
+        New-Item -ItemType Directory -Force C:\probe\dl | Out-Null
+        Invoke-WebRequest -Uri 'https://www.cygwin.com/setup-x86_64.exe' -OutFile $setup
+        Write-Host ('setup-x86_64.exe: ' + (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower() + ', signature ' + (Get-AuthenticodeSignature $setup).Status)
+    } catch {
+        Write-Host "cygwin: could not download setup: $_"
+        return
+    }
+    foreach ($site in 'https://mirrors.kernel.org/sourceware/cygwin/', 'https://cygwin.mirror.constant.com') {
+        $a = @('--quiet-mode', '--no-shortcuts', '--no-startmenu', '--no-desktop', '--only-site', '--site', $site, '--root', 'C:\cygwin64', '--local-package-dir', 'C:\probe\dl\cygwin-pkgs')
+        $p = Start-Process -FilePath $setup -ArgumentList $a -Wait -PassThru
+        Write-Host "cygwin setup via $site exit code: $($p.ExitCode)"
+        if (Test-Path 'C:\cygwin64\bin\bash.exe') { break }
+    }
+}
+
 Section 'runner'
 [Environment]::OSVersion.VersionString
-& $bash --version | Select-Object -First 1
 Write-Host "USERPROFILE=$env:USERPROFILE"
 Write-Host "JAVA_HOME=$env:JAVA_HOME"
-Write-Host "JAVA_HOME_11_X64=$env:JAVA_HOME_11_X64"
-Write-Host "JAVA_HOME_21_X64=$env:JAVA_HOME_21_X64"
-Write-Host 'Machine PATH entries that mention java:'
-([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') | Where-Object { $_ -match 'java|jdk|temurin|hostedtoolcache' }
-Write-Host 'User PATH entries that mention java:'
-([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') | Where-Object { $_ -match 'java|jdk|temurin|hostedtoolcache' }
+Write-Host ('Git install folders: ' + ((Get-ChildItem $env:ProgramFiles\Git -Directory | Select-Object -ExpandProperty Name) -join ', '))
+Write-Host "Git has mingw64: $(Test-Path $env:ProgramFiles\Git\mingw64)   Git has ucrt64: $(Test-Path $env:ProgramFiles\Git\ucrt64)"
+Write-Host "C:\msys64 present: $(Test-Path C:\msys64\usr\bin\bash.exe)"
+& $gitBash --version | Select-Object -First 1
+if (Test-Path C:\msys64\usr\bin\bash.exe) { & C:\msys64\usr\bin\bash.exe --version | Select-Object -First 1 }
 
-Section 'CONTROL: Gradle daemon and a re-pointed junction, no vfox'
-try {
-    & "$probe\install-gradle.ps1"
-    Bash 'gradle-control.sh' @($env:JAVA_HOME_11_X64, $env:JAVA_HOME_21_X64)
-} catch {
-    Write-Host "control failed: $_"
-}
+Section 'install Cygwin'
+Install-Cygwin
+if (Test-Path 'C:\cygwin64\bin\bash.exe') { & C:\cygwin64\bin\bash.exe --version | Select-Object -First 1 } else { Write-Host 'Cygwin is not available' }
 
-function Run-Flavor13 {
-    $Vfox = '1.0.13'
-    Section "FLAVOR: vfox $Vfox + java plugin v0.6.2"
+function Run-Version([string]$Vfox, [string]$PluginTag, [string]$PluginZip, [string]$PluginSha256, [bool]$HasUnuse) {
+    Section "VERSION: vfox $Vfox + java plugin $PluginTag"
     $saved = @{}
     foreach ($n in 'Path', 'JAVA_HOME', 'VERSION_FOX_PATH') { $saved[$n] = [Environment]::GetEnvironmentVariable($n, 'User') }
     $vdir = "C:\probe\vfox-$Vfox"
     try {
-        & "$probe\install-vfox.ps1" -Version $Vfox -PluginTag 'v0.6.2' -PluginZip 'vfox-java-0.6.2.zip' -PluginSha256 'ce352b2eb78478b66858b9b0b731ccb0968b48704a5d1735e989c84fb2b20d84'
+        & "$probe\install-vfox.ps1" -Version $Vfox -PluginTag $PluginTag -PluginZip $PluginZip -PluginSha256 $PluginSha256
         if (-not $?) { throw 'install-vfox.ps1 failed' }
         $env:Path = "$vdir;$basePath"
-        Bash 'install-jdks.sh' @('vfox-java-0.6.2.zip')
+        Invoke-Flavour $default 'install-jdks.sh' @("C:\probe\dl\$PluginZip")
 
-        Section "vfox $Vfox, scenario S: session scope in a fresh Git Bash, nothing vfox-related in the incoming PATH"
-        Bash 'probe-session.sh' @('11', '21')
+        foreach ($fl in $flavours) {
+            if (-not (Test-Path $fl.Exe)) { Write-Host "skipping $($fl.Name): $($fl.Exe) is missing"; continue }
 
-        Section "vfox $Vfox, scenario G part 1: vfox use -g java@11"
-        Bash 'probe-global-1.sh' @('11')
-        Show-Registry 'after the global use'
+            Section "$($fl.Name), vfox ${Vfox}, scenario S: session scope, nothing vfox-related in the incoming PATH"
+            Reset-ProcessEnv
+            $env:Path = "$vdir;$basePath"
+            Invoke-Flavour $fl 'probe-session.sh' @('11', '21')
 
-        Section "vfox $Vfox, scenario G part 2: a new Git Bash that carries the global choice, then session java@21"
-        Use-RegistryEnv $vdir
-        Bash 'probe-global-2.sh' @('21')
+            Section "$($fl.Name), vfox ${Vfox}, scenario G part 1: vfox use -g java@11"
+            Invoke-Flavour $fl 'probe-global-1.sh' @('11')
+            Show-Registry 'after the global use'
 
-        Section "vfox $Vfox, scenario G part 3: the same, but .bashrc first drops vfox entries from PATH"
-        Use-RegistryEnv $vdir
-        Bash 'probe-global-3.sh' @('21')
+            Section "$($fl.Name), vfox ${Vfox}, scenario G part 2: a new shell that carries the global choice, then session java@21"
+            Use-RegistryEnv $vdir
+            Invoke-Flavour $fl 'probe-global-2.sh' @('21')
 
-        Section "vfox $Vfox, scenario P: the same in PowerShell 7"
-        Use-RegistryEnv $vdir
-        Pwsh7 'probe-global-pwsh.ps1' @('21')
-
-        Section "vfox $Vfox, reset: drop the global java and the registry entries"
-        Reset-ProcessEnv
-        $env:Path = "$vdir;$basePath"
-        Bash 'probe-unuse.sh'
-        foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n], 'User') }
-        Show-Registry 'restored to the baseline'
-
-        Section "vfox $Vfox, scenario X: no global java, only an unrelated vfox directory in the Windows PATH"
-        [Environment]::SetEnvironmentVariable('Path', "C:\Users\runneradmin\.vfox\sdks\nodejs\bin;$($saved['Path'])", 'User')
-        Show-Registry 'with an unrelated vfox directory in the User PATH'
-        Use-RegistryEnv $vdir
-        Bash 'probe-fakedir.sh' @('21')
+            # give the next scenario a clean start: no global java, registry back to the baseline
+            Reset-ProcessEnv
+            $env:Path = "$vdir;$basePath"
+            if ($HasUnuse) { Invoke-Flavour $default 'probe-unuse.sh' } else { Remove-Item "$env:USERPROFILE\.version-fox\.tool-versions" -ErrorAction SilentlyContinue }
+            foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n], 'User') }
+        }
     } catch {
-        Write-Host "flavor $Vfox failed: $_"
+        Write-Host "version $Vfox failed: $_"
     } finally {
         foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n], 'User') }
         Reset-ProcessEnv
@@ -137,39 +154,8 @@ function Run-Flavor13 {
     }
 }
 
-function Run-Flavor054 {
-    $Vfox = '0.5.4'
-    Section "FLAVOR: vfox $Vfox + java plugin v0.4.3"
-    $saved = @{}
-    foreach ($n in 'Path', 'JAVA_HOME', 'VERSION_FOX_PATH') { $saved[$n] = [Environment]::GetEnvironmentVariable($n, 'User') }
-    $vdir = "C:\probe\vfox-$Vfox"
-    try {
-        & "$probe\install-vfox.ps1" -Version $Vfox -PluginTag 'v0.4.3' -PluginZip 'vfox-java-0.4.3.zip' -PluginSha256 'a9007600ecf40d6a0c08f1f519e8a55f6b214afe87c6398995323bb68d697dfa'
-        if (-not $?) { throw 'install-vfox.ps1 failed' }
-        $env:Path = "$vdir;$basePath"
-        Bash 'install-jdks.sh' @('vfox-java-0.4.3.zip')
-
-        Section "vfox $Vfox, scenario S: session scope in a fresh Git Bash"
-        Bash 'probe-session.sh' @('11', '21')
-
-        Section "vfox $Vfox, scenario G part 1: vfox use -g java@11"
-        Bash 'probe-global-1.sh' @('11')
-        Show-Registry 'after the global use'
-
-        Section "vfox $Vfox, scenario G part 2: a new Git Bash that carries the global choice, then session java@21"
-        Use-RegistryEnv $vdir
-        Bash 'probe-global-2.sh' @('21')
-    } catch {
-        Write-Host "flavor $Vfox failed: $_"
-    } finally {
-        foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n], 'User') }
-        Reset-ProcessEnv
-        Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    }
-}
-
-Run-Flavor13
-Run-Flavor054
+Run-Version '1.0.13' 'v0.6.2' 'vfox-java-0.6.2.zip' 'ce352b2eb78478b66858b9b0b731ccb0968b48704a5d1735e989c84fb2b20d84' $true
+Run-Version '0.5.4' 'v0.4.3' 'vfox-java-0.4.3.zip' 'a9007600ecf40d6a0c08f1f519e8a55f6b214afe87c6398995323bb68d697dfa' $false
 
 Section 'PROBE FINISHED'
 exit 0

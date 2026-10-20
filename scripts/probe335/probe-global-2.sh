@@ -11,25 +11,25 @@ B=${1:?majorB}
 env_banner
 echo "inherited JAVA_HOME=[$JAVA_HOME]"
 echo "inherited hook variables: __VFOX_SHELL=[$__VFOX_SHELL] __VFOX_PID=[$__VFOX_PID] __VFOX_CURTMPPATH=[$__VFOX_CURTMPPATH]"
-echo "java before activation: $(command -v java) -> $(java -version 2>&1 | head -1)"
+echo "java before activation: $(command -v java) -> $(java -version 2>&1 | $HEAD -1)"
 winpath_diag
 
 section "activate (what .bashrc does)"
-eval "$(vfox activate bash)"
+eval "$("$VFOX" activate bash)"
 prompt
 show "G0: new shell, global choice only"
 gradle_jv
 
 section "vfox use java@$B (session) + prompt"
-timeout 120 vfox use java@"$B"
+$TIMEOUT 120 "$VFOX" use java@"$B"
 prompt
 show "G1: session $B on top of the global choice"
 gradle_jv
 gradle_jv_nodaemon
 
-if vfox --version | grep -q ' 1\.'; then
+if "$VFOX" --version | $GREP -q ' 1\.'; then
   section "why: vfox's own debug log for the PATH it exports"
-  vfox --debug env -s bash 2>&1 >/dev/null | grep -i -E 'vfox path|system PATH' | head -8
+  "$VFOX" --debug env -s bash 2>&1 | $GREP -i -E 'Removing vfox path' | $HEAD -8
 fi
 gradle_stop
 
