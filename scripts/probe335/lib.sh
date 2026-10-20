@@ -29,6 +29,27 @@ linkinfo() {
   fi
 }
 
+
+# PATH entries that matter for java, with their position in the list.
+path_diag() {
+  echo "PATH entries that mention java/jdk/vfox (position: entry), of $(printf '%s\n' "$PATH" | tr ':' '\n' | wc -l) in total:"
+  printf '%s\n' "$PATH" | tr ':' '\n' | nl -ba | grep -i -E 'java|jdk|temurin|hostedtoolcache|\.vfox|\.version-fox' | head -20
+}
+
+# The same list the way a native Windows program (vfox.exe) sees it, before any hook touched it.
+winpath_diag() {
+  if is_windows; then
+    echo "Windows-form PATH as native programs see it (position: entry):"
+    MSYS_NO_PATHCONV=1 cmd.exe /c "echo %PATH%" | tr -d '\r' | tr ';' '\n' | nl -ba | grep -i -E 'java|jdk|temurin|hostedtoolcache|\.vfox|\.version-fox' | head -20
+  fi
+}
+
+# What a user would add to .bashrc to keep vfox entries out of the incoming PATH.
+strip_vfox_from_path() {
+  PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v -E '/\.(vfox|version-fox)(/|$)' | paste -sd: -)
+  export PATH
+}
+
 show() {
   printf '\n--- %s\n' "$1"
   echo "JAVA_HOME=[$JAVA_HOME]"
@@ -43,8 +64,7 @@ show() {
   else
     echo "\$JAVA_HOME/bin/java is not executable per [ -x ]"
   fi
-  echo "PATH (first 4 entries):"
-  printf '%s\n' "$PATH" | tr ':' '\n' | sed -n '1,4p'
+  path_diag
 }
 
 # Needs GRADLE (unix path of the gradle start script) and GRADLE_PROJECT.
