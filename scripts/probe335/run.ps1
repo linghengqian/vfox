@@ -1,8 +1,6 @@
-# vfox#335 probe driver, run 3. Lives on a scratch branch of a fork only; scripts/e2e-test.ps1 calls it.
-# The same scenarios as run 2, under the bash flavours run 2 did not cover:
-#   - Git Bash with MSYSTEM=MINGW64 (the report's prompt says MINGW64)
-#   - the MSYS2 that ships on the runner, MSYSTEM=MINGW64, Windows PATH inherited
-#   - a real Cygwin (the issue title says cygwin)
+# vfox#335 probe driver, run 4. Lives on a scratch branch of a fork only; scripts/e2e-test.ps1 calls it.
+# The same scenarios as runs 2 and 3, under the Git Bash of the report's time: PortableGit 2.46.0 (2024-07-29), which still
+# ships mingw64 and starts as MSYSTEM=MINGW64 (the runner's Git for Windows 2.56 only has ucrt64 and ignores MSYSTEM=MINGW64).
 # vfox 1.0.13 + java plugin 0.6.2 runs first because 1.0.x keeps using an existing ~/.version-fox, which the 0.5.4 run creates.
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
@@ -35,9 +33,7 @@ $baseJavaHome = $env:JAVA_HOME
 
 $default = @{ Name = 'gitbash-default'; Exe = $gitBash; Env = @{}; Cygwin = $false }
 $flavours = @(
-    @{ Name = 'gitbash-MSYSTEM-MINGW64'; Exe = $gitBash; Env = @{ MSYSTEM = 'MINGW64' }; Cygwin = $false },
-    @{ Name = 'msys2-MINGW64'; Exe = 'C:\msys64\usr\bin\bash.exe'; Env = @{ MSYSTEM = 'MINGW64'; MSYS2_PATH_TYPE = 'inherit' }; Cygwin = $false },
-    @{ Name = 'cygwin'; Exe = 'C:\cygwin64\bin\bash.exe'; Env = @{ CYGWIN = 'nodosfilewarning' }; Cygwin = $true }
+    @{ Name = 'portablegit-2.46.0-MINGW64'; Exe = 'C:\pgit\bin\bash.exe'; Env = @{ MSYSTEM = 'MINGW64' }; Cygwin = $false }
 )
 
 function Invoke-Flavour([hashtable]$fl, [string]$script, [string[]]$scriptArgs = @()) {
@@ -108,9 +104,22 @@ Write-Host "C:\msys64 present: $(Test-Path C:\msys64\usr\bin\bash.exe)"
 & $gitBash --version | Select-Object -First 1
 if (Test-Path C:\msys64\usr\bin\bash.exe) { & C:\msys64\usr\bin\bash.exe --version | Select-Object -First 1 }
 
-Section 'install Cygwin'
-Install-Cygwin
-if (Test-Path 'C:\cygwin64\bin\bash.exe') { & C:\cygwin64\bin\bash.exe --version | Select-Object -First 1 } else { Write-Host 'Cygwin is not available' }
+Section 'install PortableGit 2.46.0'
+function Install-PortableGit {
+    if (Test-Path 'C:\pgit\bin\bash.exe') { return }
+    $exe = 'C:\probe\dl\PortableGit-2.46.0-64-bit.7z.exe'
+    New-Item -ItemType Directory -Force C:\probe\dl | Out-Null
+    Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.46.0.windows.1/PortableGit-2.46.0-64-bit.7z.exe' -OutFile $exe
+    $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne 'dedae83f4d0851bcbf473c516701e2da6a5d7c574d694d5eceec46d1307132ea') { throw "PortableGit checksum mismatch: $actual" }
+    $p = Start-Process -FilePath $exe -ArgumentList '-oC:\pgit', '-y' -Wait -PassThru
+    Write-Host "PortableGit extraction exit code: $($p.ExitCode)"
+}
+try { Install-PortableGit } catch { Write-Host "PortableGit install failed: $_" }
+if (Test-Path 'C:\pgit\bin\bash.exe') {
+    & 'C:\pgit\bin\bash.exe' --version | Select-Object -First 1
+    Write-Host ('PortableGit folders: ' + ((Get-ChildItem C:\pgit -Directory | Select-Object -ExpandProperty Name) -join ', '))
+} else { Write-Host 'PortableGit is not available' }
 
 function Run-Version([string]$Vfox, [string]$PluginTag, [string]$PluginZip, [string]$PluginSha256, [bool]$HasUnuse) {
     Section "VERSION: vfox $Vfox + java plugin $PluginTag"
