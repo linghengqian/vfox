@@ -65,7 +65,9 @@ function Record([string]$name, [bool]$ok) {
 }
 
 function Bash([string]$script, [string[]]$scriptArgs = @()) {
-    & $bash --login "$PSScriptRoot\$script" @scriptArgs
+    # Print the script's output instead of returning it: the function must hand
+    # back only the exit code, or $rc becomes the whole output plus the code.
+    & $bash --login "$PSScriptRoot\$script" @scriptArgs 2>&1 | ForEach-Object { Write-Host $_ }
     return $LASTEXITCODE
 }
 
