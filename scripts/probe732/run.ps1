@@ -97,8 +97,17 @@ Section 'source under test'
 Push-Location $repo
 & git rev-parse HEAD
 & git log -1 --format='%H %s'
-Write-Host "go source changes against $upstreamMain (should be empty):"
-& git diff --stat $upstreamMain -- '*.go' 'go.mod' 'go.sum'
+& git fetch --quiet https://github.com/version-fox/vfox.git main
+if ($LASTEXITCODE -ne 0) { throw 'git fetch upstream main failed' }
+$fetchedMain = (& git rev-parse FETCH_HEAD).Trim()
+Write-Host "upstream main at probe time: $fetchedMain"
+if ($fetchedMain -ne $upstreamMain) {
+    throw "upstream main moved to $fetchedMain; this probe pins $upstreamMain"
+}
+$srcDiff = & git diff --stat $upstreamMain -- '*.go' 'go.mod' 'go.sum'
+if ($LASTEXITCODE -ne 0) { throw "git diff against $upstreamMain failed" }
+if ($srcDiff) { throw "Go source differs from upstream main: $srcDiff" }
+Write-Host "verified: no Go source difference against upstream main $upstreamMain"
 Pop-Location
 
 $basePath = $env:Path
